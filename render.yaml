@@ -1,0 +1,28 @@
+# Render Blueprint - auto-create backend service
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: mdd-care-api
+    runtime: node
+    region: singapore
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PORT
+        value: 10000
+      - key: MONGO_URI
+        sync: false        # User must fill in: mongodb+srv://...
+      - key: FRONTEND_URL
+        sync: false        # User must fill in: https://your-app.vercel.app
+      # Optional - uncomment when you have Twilio
+      # - key: TWILIO_SID
+      #   sync: false
+      # - key: TWILIO_TOKEN
+      #   sync: false
+      # - key: TWILIO_PHONE
+      #   sync: false

@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&display=swap');
+
+html, body {
+  font-family: 'Sarabun', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Winter Palette - scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: theme('colors.slate.100'); }
+::-webkit-scrollbar-thumb { background: theme('colors.slate.300'); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: theme('colors.slate.400'); }
+
+.dark ::-webkit-scrollbar-track { background: theme('colors.slate.900'); }
+.dark ::-webkit-scrollbar-thumb { background: theme('colors.slate.700'); }
+.dark ::-webkit-scrollbar-thumb:hover { background: theme('colors.slate.600'); }
+
+/* Glow effect สำหรับ Red Flag banner */
+.red-flag-glow {
+  background: linear-gradient(120deg, #dc2626 0%, #991b1b 50%, #dc2626 100%);
+  background-size: 200% 200%;
+  animation: gradient-shift 2s ease infinite;
+}
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}

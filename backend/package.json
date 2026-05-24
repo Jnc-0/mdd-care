@@ -1,0 +1,25 @@
+{
+  "name": "mdd-care-backend",
+  "version": "1.0.0",
+  "description": "Backend สำหรับระบบบริหารจัดการคนไข้จิตเวช รพ.คลองหาด",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0",
+    "node-cron": "^3.0.3",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^9.1.6",
+    "nodemon": "^3.0.1"
+  }
+}
