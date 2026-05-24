@@ -15,8 +15,8 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { io } from 'socket.io-client';
 
-const API_URL    = process.env.NEXT_PUBLIC_API_URL    || 'http://localhost:5000';
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
+const API_URL    = process.env.NEXT_PUBLIC_API_URL    ?? '';
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? '';
 
 const ROLES = [
   { value: 'nurse',     label: 'พยาบาล',      color: 'indigo' },

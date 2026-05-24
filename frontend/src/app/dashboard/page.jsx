@@ -1,597 +1,393 @@
 'use client';
 
 /**
- * MDD Care - Dashboard Page
+ * MDD Care - Dashboard (enriched)
  * รพ.คลองหาด แผนกจิตเวช
- *
- * Features:
- *  - Light/Dark Mode (Winter Palette: slate/blue/indigo/zinc)
- *  - แถบ Red Flag กะพริบทันทีเมื่อมีอาการวิกฤต (Socket.io)
- *  - รายชื่อคนไข้ที่ลืมทานยา + ปุ่มส่ง SMS ซ้ำ
- *  - นัดหมายวันนี้
- *  - ปุ่มตรวจเช็คยาควบคุมพิเศษ (Refill Check)
- *  - Activity Log แสดง SMS ที่ส่งล่าสุดแบบเรียลไทม์
  */
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { io } from 'socket.io-client';
+import AppShell from '@/components/AppShell';
 
-const API_URL    = process.env.NEXT_PUBLIC_API_URL    || 'http://localhost:5000';
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
+const API_URL    = process.env.NEXT_PUBLIC_API_URL    ?? '';
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? '';
 
-/* ============ Helpers ============ */
-const fmtTime = (d) => new Date(d).toLocaleTimeString('th-TH', {
-  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok'
-});
-const fmtDate = (d) => new Date(d).toLocaleDateString('th-TH', {
-  day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok'
-});
+const fmtTime = (d) => new Date(d).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+const fmtDate = (d) => new Date(d).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
 
-/* ============ Components ============ */
+/* ============ Main ============ */
+export default function DashboardPage() {
+  const [stats, setStats] = useState({ totalPatients: 0, activeRedFlags: 0, todayAppointments: 0, missedMedications: 0 });
+  const [redFlagAlert, setRedFlagAlert] = useState(null);
+  const [missedMeds,   setMissedMeds]   = useState([]);
+  const [queue,        setQueue]        = useState([]);
+  const [recentVisits, setRecentVisits] = useState([]);
+  const [smsLog,       setSmsLog]       = useState([]);
+  const [patients,     setPatients]     = useState([]);
+  const [phq9Trend,    setPhq9Trend]    = useState([]);
+  const [refillOpen,   setRefillOpen]   = useState(false);
+
+  const socketRef = useRef(null);
+
+  const fetchAll = async () => {
+    try {
+      const [s, m, q, r, p, n, t] = await Promise.all([
+        fetch(`${API_URL}/api/dashboard/stats`).then(r => r.json()),
+        fetch(`${API_URL}/api/medications/missed`).then(r => r.json()),
+        fetch(`${API_URL}/api/queue`).then(r => r.json()),
+        fetch(`${API_URL}/api/records/recent`).then(r => r.json()),
+        fetch(`${API_URL}/api/patients`).then(r => r.json()),
+        fetch(`${API_URL}/api/notifications/recent`).then(r => r.json()),
+        fetch(`${API_URL}/api/reports/phq9-trend`).then(r => r.json())
+      ]);
+      setStats(s); setMissedMeds(m); setQueue(q); setRecentVisits(r);
+      setPatients(p); setSmsLog(n); setPhq9Trend(t);
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    fetchAll();
+    socketRef.current = io(SOCKET_URL || undefined, { transports: ['websocket', 'polling'] });
+    const s = socketRef.current;
+    s.on('red-flag-alert', (data) => {
+      setRedFlagAlert(data);
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('🚨 RED FLAG ALERT', { body: `${data.patient.fullName} - ${data.flagLabel}`, tag: 'red-flag' });
+      }
+    });
+    s.on('medication-missed', fetchAll);
+    s.on('medication-confirmed', fetchAll);
+    s.on('refill-warning', fetchAll);
+    s.on('sms-sent', (data) => setSmsLog(prev => [data, ...prev].slice(0, 20)));
+
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    return () => s.disconnect();
+  }, []);
+
+  const testRedFlag = async () => {
+    if (patients.length === 0) return alert('ไม่มีคนไข้');
+    const p = patients[1] || patients[0];
+    await fetch(`${API_URL}/api/red-flag`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patientId: p._id, flagType: 'suicidal',
+        description: 'ทดสอบระบบ - คนไข้พูดถึงการฆ่าตัวตาย' })
+    });
+  };
+
+  const triggerCron = async () => {
+    const res = await fetch(`${API_URL}/api/trigger/medication-check`, { method: 'POST' });
+    const data = await res.json();
+    alert(`ตรวจสอบเสร็จ - พบ ${data.checked} รายการ ส่ง SMS ${data.smsSent} ราย`);
+    fetchAll();
+  };
+
+  return (
+    <AppShell title="แดชบอร์ดทีมแพทย์">
+
+      {/* Red Flag Banner */}
+      {redFlagAlert && <RedFlagBanner alert={redFlagAlert} onClose={() => setRedFlagAlert(null)} />}
+
+      {/* Stats Row */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+        <StatCard icon="👥" label="คนไข้"        value={stats.totalPatients}     accent="indigo" />
+        <StatCard icon="🚨" label="Red Flag"     value={stats.activeRedFlags}    accent="red" />
+        <StatCard icon="📅" label="นัดวันนี้"    value={stats.todayAppointments} accent="blue" />
+        <StatCard icon="⏰" label="รอตรวจ"       value={stats.todayWaiting || 0} accent="amber" />
+        <StatCard icon="💊" label="ลืมยา"        value={stats.missedMedications} accent="rose" />
+        <StatCard icon="⚠️" label="ยาควบคุม"    value={stats.controlledMeds || 0} accent="slate" />
+      </div>
+
+      {/* Quick Actions */}
+      <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Link href="/visits/new" className="px-4 py-3 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-700 hover:from-indigo-700 text-white font-medium shadow-sm flex items-center justify-center gap-2 text-sm">
+          📝 บันทึกการตรวจ
+        </Link>
+        <Link href="/queue" className="px-4 py-3 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-700 hover:from-blue-700 text-white font-medium shadow-sm flex items-center justify-center gap-2 text-sm">
+          🎫 คิวตรวจวันนี้
+        </Link>
+        <button onClick={() => setRefillOpen(true)} className="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-800 text-white font-medium flex items-center justify-center gap-2 text-sm">
+          🔍 ตรวจยาควบคุม
+        </button>
+        <button onClick={testRedFlag} className="px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium flex items-center justify-center gap-2 text-sm">
+          🚨 ทดสอบ Red Flag
+        </button>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-5">
+        {/* Today's Queue (priority) */}
+        <Card title="🎫 คิวที่ต้องดูแล" badge={queue.filter(q => q.status === 'waiting' || q.status === 'in-progress').length} action={<Link href="/queue" className="text-xs text-indigo-600 hover:underline">ดูทั้งหมด →</Link>}>
+          <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+            {queue.filter(q => q.status !== 'completed').length === 0 ? (
+              <Empty icon="✓" text="คิวว่าง" />
+            ) : queue.filter(q => q.status !== 'completed').slice(0, 6).map(apt => (
+              <Link key={apt._id} href={`/patients/${apt.patient?.hn}`}
+                    className={`block p-2.5 rounded-lg border ${
+                      apt.patient?.redFlags?.some(f => !f.resolved)
+                        ? 'bg-red-50 dark:bg-red-950/30 border-red-300'
+                        : 'bg-slate-50 dark:bg-slate-900/30 border-slate-200 dark:border-slate-700'
+                    } hover:scale-[1.01] transition`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      {apt.time} - {apt.patient?.fullName}
+                    </div>
+                    <div className="text-xs text-slate-500 truncate">HN:{apt.patient?.hn} · {apt.reason}</div>
+                  </div>
+                  <span className={`text-[10px] px-2 py-0.5 rounded ${
+                    apt.status === 'in-progress' ? 'bg-amber-200 text-amber-800' :
+                    apt.status === 'waiting'     ? 'bg-blue-200 text-blue-800' :
+                                                   'bg-slate-200 text-slate-700'
+                  }`}>{apt.status}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
+
+        {/* Missed Medications */}
+        <Card title="💊 คนไข้ลืมทานยา" badge={missedMeds.length} danger={missedMeds.length > 0}>
+          <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+            {missedMeds.length === 0 ? (
+              <Empty icon="✓" text="ไม่มีคนไข้ลืมยา" />
+            ) : missedMeds.map(log => (
+              <Link key={log._id} href={`/patients/${log.patient?.hn}`}
+                    className="block p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 transition">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">{log.patient?.fullName}</div>
+                    <div className="text-xs text-slate-500">{log.medication?.medicationName} · {fmtTime(log.scheduledTime)}</div>
+                  </div>
+                  <span className="text-[10px] text-blue-600 font-medium">✉️ SMS ส่งแล้ว</span>
+                </div>
+              </Link>
+            ))}
+            {missedMeds.length > 0 && (
+              <button onClick={triggerCron} className="w-full mt-2 text-xs py-2 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 font-medium hover:bg-indigo-100">
+                🔄 ตรวจสอบใหม่ + ส่ง SMS อีกครั้ง
+              </button>
+            )}
+          </div>
+        </Card>
+
+        {/* Recent Visits */}
+        <Card title="📋 ตรวจล่าสุด" badge={recentVisits.length} action={<Link href="/reports" className="text-xs text-indigo-600 hover:underline">รายงาน →</Link>}>
+          <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+            {recentVisits.length === 0 ? (
+              <Empty icon="📭" text="ยังไม่มี" />
+            ) : recentVisits.slice(0, 8).map(r => (
+              <Link key={r._id} href={`/patients/${r.patientHN}`}
+                    className="block p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 transition">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">{r.patientName}</div>
+                    <div className="text-xs text-slate-500">{fmtDate(r.visitDate)} · {r.doctorName}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-base font-bold ${
+                      r.PHQ9Score >= 20 ? 'text-red-600' :
+                      r.PHQ9Score >= 15 ? 'text-amber-600' :
+                      r.PHQ9Score >= 10 ? 'text-indigo-600' : 'text-blue-600'
+                    }`}>{r.PHQ9Score}</div>
+                    <div className="text-[9px] text-slate-500">PHQ-9</div>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-5 mt-5">
+        {/* Mini PHQ-9 trend */}
+        <Card title="📈 PHQ-9 เฉลี่ย (6 เดือน)">
+          {phq9Trend.length > 0 && <MiniChart data={phq9Trend} />}
+        </Card>
+
+        {/* SMS Log */}
+        <Card title="📱 SMS ที่ส่งล่าสุด (Real-time)" badge={smsLog.length}>
+          <div className="space-y-1 max-h-[260px] overflow-y-auto pr-1">
+            {smsLog.length === 0 ? (
+              <Empty icon="📭" text="ยังไม่มี SMS" />
+            ) : smsLog.map((log, i) => (
+              <SmsLogRow key={log._id || i} log={log} />
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {refillOpen && <RefillModal patients={patients} onClose={() => setRefillOpen(false)} />}
+    </AppShell>
+  );
+}
+
+/* ============ Sub-components ============ */
 
 function StatCard({ icon, label, value, accent }) {
   const colors = {
-    blue:   'from-blue-500 to-indigo-600 text-blue-100',
-    indigo: 'from-indigo-500 to-purple-600 text-indigo-100',
-    red:    'from-red-500 to-rose-600 text-red-100',
-    slate:  'from-slate-600 to-slate-800 text-slate-100'
+    indigo: 'from-indigo-500 to-blue-600',
+    blue:   'from-blue-500 to-cyan-600',
+    red:    'from-red-500 to-rose-600',
+    amber:  'from-amber-500 to-orange-600',
+    rose:   'from-rose-500 to-pink-600',
+    slate:  'from-slate-600 to-slate-800'
   };
   return (
-    <div className="rounded-2xl p-5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition">
-      <div className="flex items-center gap-4">
-        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${colors[accent]} flex items-center justify-center text-xl shadow-sm`}>
-          {icon}
-        </div>
-        <div className="flex-1">
-          <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 font-medium">
-            {label}
-          </div>
-          <div className="text-3xl font-bold text-slate-900 dark:text-slate-100 mt-0.5">
-            {value}
-          </div>
-        </div>
+    <div className="bg-white dark:bg-slate-800 rounded-xl p-3 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition">
+      <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${colors[accent]} flex items-center justify-center text-white text-base shadow-sm mb-2`}>
+        {icon}
       </div>
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-medium leading-tight">{label}</div>
+      <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">{value}</div>
     </div>
   );
 }
 
-function RedFlagBanner({ alert, onClose }) {
-  if (!alert) return null;
+function Card({ title, children, badge, action, danger }) {
   return (
-    <div className="red-flag-glow rounded-2xl p-5 mb-6 text-white shadow-2xl animate-critical-flash">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="text-4xl animate-soft-pulse">🚨</div>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wider opacity-90">
-              CRITICAL ALERT - RED FLAG
-            </div>
-            <div className="text-xl font-bold mt-0.5">
-              {alert.patient.fullName} (HN:{alert.patient.hn})
-            </div>
-            <div className="text-sm opacity-95 mt-0.5">
-              อาการ: <span className="font-semibold">{alert.flagLabel || alert.flagType}</span>
-              {alert.description && ` — ${alert.description}`}
-            </div>
-            <div className="text-xs opacity-80 mt-1">
-              เวลา: {fmtTime(alert.timestamp)} น. • ส่ง SMS ถึงทีมแพทย์เวรแล้ว
-            </div>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg font-medium backdrop-blur transition"
-        >
-          รับทราบ
-        </button>
+    <div className={`rounded-2xl p-5 border shadow-sm ${
+      danger
+        ? 'bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-900'
+        : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+    }`}>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          {title}
+          {badge !== undefined && (
+            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+              danger
+                ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                : 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300'
+            }`}>{badge}</span>
+          )}
+        </h3>
+        {action}
       </div>
+      {children}
     </div>
   );
 }
 
-function MissedMedRow({ log, onResend }) {
+function Empty({ icon, text }) {
   return (
-    <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700">
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 flex items-center justify-center flex-shrink-0">
-          💊
-        </div>
-        <div className="min-w-0">
-          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-            {log.patient?.fullName || '—'}
-          </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">
-            {log.medication?.medicationName} · เวลา {fmtTime(log.scheduledTime)}
-          </div>
-        </div>
-      </div>
-      <button
-        onClick={() => onResend(log)}
-        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition flex items-center gap-1.5"
-      >
-        📱 ส่ง SMS ซ้ำ
-      </button>
-    </div>
-  );
-}
-
-function AppointmentRow({ apt }) {
-  const statusStyle = {
-    scheduled: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-    completed: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300',
-    missed:    'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
-    cancelled: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
-  }[apt.status] || 'bg-slate-100 text-slate-700';
-
-  return (
-    <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700">
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="text-center min-w-[55px]">
-          <div className="text-lg font-bold text-indigo-600 dark:text-indigo-400">
-            {apt.time}
-          </div>
-          <div className="text-[10px] text-slate-500 uppercase tracking-wider">น.</div>
-        </div>
-        <div className="border-l border-slate-300 dark:border-slate-600 pl-3 min-w-0">
-          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-            {apt.patient?.fullName}
-          </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">
-            HN:{apt.patient?.hn} · {apt.reason || '—'}
-          </div>
-        </div>
-      </div>
-      <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${statusStyle}`}>
-        {apt.status}
-      </span>
+    <div className="text-center py-8 text-slate-400">
+      <div className="text-3xl mb-1">{icon}</div>
+      <div className="text-xs">{text}</div>
     </div>
   );
 }
 
 function SmsLogRow({ log }) {
-  const typeColor = {
-    red_flag:             'bg-red-500',
-    medication_miss:      'bg-amber-500',
-    appointment_reminder: 'bg-blue-500',
-    refill_warning:       'bg-rose-500',
-    general:              'bg-slate-500'
-  }[log.type] || 'bg-slate-500';
-
-  const typeLabel = {
-    red_flag:             'Red Flag',
-    medication_miss:      'ลืมยา',
-    appointment_reminder: 'นัดหมาย',
-    refill_warning:       'เวียนยา',
-    general:              'ทั่วไป'
-  }[log.type] || log.type;
-
+  const typeColor = { red_flag: 'bg-red-500', medication_miss: 'bg-amber-500', appointment_reminder: 'bg-blue-500', refill_warning: 'bg-rose-500' }[log.type] || 'bg-slate-500';
+  const typeLabel = { red_flag: 'Red Flag', medication_miss: 'ลืมยา', appointment_reminder: 'นัดหมาย', refill_warning: 'เวียนยา' }[log.type] || log.type;
   return (
-    <div className="flex items-start gap-3 p-3 text-sm border-l-2 border-slate-200 dark:border-slate-700 animate-slide-in">
-      <div className={`px-2 py-0.5 text-xs font-medium text-white rounded ${typeColor} flex-shrink-0 mt-0.5`}>
-        {typeLabel}
-      </div>
+    <div className="flex items-start gap-2 p-2 text-xs border-l-2 border-slate-200 dark:border-slate-700 animate-slide-in">
+      <div className={`px-1.5 py-0.5 text-[9px] text-white rounded ${typeColor} flex-shrink-0 mt-0.5`}>{typeLabel}</div>
       <div className="flex-1 min-w-0">
-        <div className="text-xs text-slate-500 dark:text-slate-400">
-          ถึง: <span className="font-mono">{log.to || log.recipient}</span>
-          {' · '}
-          {fmtTime(log.timestamp || log.createdAt)}
+        <div className="text-[10px] text-slate-500 dark:text-slate-400">
+          <span className="font-mono">{log.to || log.recipient}</span> · {fmtTime(log.timestamp || log.createdAt)}
         </div>
-        <div className="text-slate-700 dark:text-slate-300 line-clamp-2 mt-0.5">
-          {log.message}
-        </div>
+        <div className="text-slate-700 dark:text-slate-300 line-clamp-2 mt-0.5">{log.message}</div>
       </div>
     </div>
   );
 }
 
-function RefillModal({ open, onClose, patients }) {
-  const [patientId, setPatientId] = useState('');
-  const [medName, setMedName]     = useState('');
-  const [result, setResult]       = useState(null);
-  const [loading, setLoading]     = useState(false);
+function MiniChart({ data }) {
+  const w = 400, h = 120, padding = 20;
+  const max = Math.max(...data.map(d => d.avgScore), 20);
+  const innerW = w - padding * 2;
+  const innerH = h - padding * 2;
+  const xStep = data.length > 1 ? innerW / (data.length - 1) : 0;
+  const points = data.map((d, i) => ({
+    x: padding + i * xStep,
+    y: padding + innerH - (d.avgScore / max) * innerH,
+    val: d.avgScore, label: d.month
+  }));
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto">
+      <path d={linePath} fill="none" stroke="#6366f1" strokeWidth="2" />
+      {points.map((p, i) => (
+        <g key={i}>
+          <circle cx={p.x} cy={p.y} r="3" fill="#6366f1" />
+          <text x={p.x} y={p.y - 6} fontSize="9" fontWeight="bold" textAnchor="middle" fill="currentColor" className="text-slate-900 dark:text-slate-100">{p.val}</text>
+          <text x={p.x} y={h - 4} fontSize="9" textAnchor="middle" fill="currentColor" className="text-slate-500">{p.label}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
 
-  if (!open) return null;
+function RedFlagBanner({ alert, onClose }) {
+  return (
+    <div className="red-flag-glow rounded-2xl p-5 mb-6 text-white shadow-2xl">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="text-4xl animate-soft-pulse">🚨</div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider opacity-90">CRITICAL ALERT - RED FLAG</div>
+            <div className="text-xl font-bold mt-0.5">{alert.patient.fullName} (HN:{alert.patient.hn})</div>
+            <div className="text-sm opacity-95 mt-0.5">อาการ: <span className="font-semibold">{alert.flagLabel || alert.flagType}</span>{alert.description && ` — ${alert.description}`}</div>
+            <div className="text-xs opacity-80 mt-1">เวลา: {fmtTime(alert.timestamp)} น. • ส่ง SMS ถึงทีมแพทย์เวรแล้ว</div>
+          </div>
+        </div>
+        <button onClick={onClose} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg font-medium">รับทราบ</button>
+      </div>
+    </div>
+  );
+}
+
+function RefillModal({ patients, onClose }) {
+  const [pid, setPid]   = useState('');
+  const [med, setMed]   = useState('');
+  const [res, setRes]   = useState(null);
+  const [load, setLoad] = useState(false);
 
   const check = async () => {
-    if (!patientId || !medName) return;
-    setLoading(true);
-    setResult(null);
+    if (!pid || !med) return;
+    setLoad(true);
     try {
-      const res = await fetch(`${API_URL}/api/check-refill`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patientId, medicationName: medName })
+      const r = await fetch(`${API_URL}/api/check-refill`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId: pid, medicationName: med })
       });
-      setResult(await res.json());
-    } catch (e) {
-      setResult({ error: e.message });
-    } finally {
-      setLoading(false);
-    }
+      setRes(await r.json());
+    } finally { setLoad(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-200 dark:border-slate-700">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100">
-            🔍 ตรวจสอบยาควบคุมพิเศษ
-          </h3>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none"
-          >×</button>
+          <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100">🔍 ตรวจสอบยาควบคุมพิเศษ</h3>
+          <button onClick={onClose} className="text-2xl text-slate-400">×</button>
         </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-          ระบบจะตรวจสอบประวัติการรับยาในรอบ 30 วัน หากพบการเวียนรับซ้ำซ้อนจะแจ้งเตือนญาติทาง SMS อัตโนมัติ
-        </p>
-
         <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-              คนไข้
-            </label>
-            <select
-              value={patientId}
-              onChange={(e) => setPatientId(e.target.value)}
-              className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            >
-              <option value="">-- เลือกคนไข้ --</option>
-              {patients.map(p => (
-                <option key={p._id} value={p._id}>
-                  {p.fullName} (HN:{p.hn})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-              ชื่อยา
-            </label>
-            <input
-              type="text"
-              value={medName}
-              onChange={(e) => setMedName(e.target.value)}
-              placeholder="เช่น Methylphenidate, Alprazolam"
-              className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <button
-            onClick={check}
-            disabled={loading || !patientId || !medName}
-            className="w-full px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-medium transition"
-          >
-            {loading ? 'กำลังตรวจสอบ...' : 'ตรวจสอบ Refill'}
+          <select value={pid} onChange={e => setPid(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100">
+            <option value="">-- เลือกคนไข้ --</option>
+            {patients.map(p => <option key={p._id} value={p._id}>{p.fullName} (HN:{p.hn})</option>)}
+          </select>
+          <input type="text" value={med} onChange={e => setMed(e.target.value)} placeholder="เช่น Methylphenidate, Alprazolam"
+                 className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100" />
+          <button onClick={check} disabled={load || !pid || !med}
+                  className="w-full px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
+            {load ? 'กำลังตรวจ...' : 'ตรวจสอบ'}
           </button>
         </div>
-
-        {result && (
+        {res && (
           <div className={`mt-4 p-4 rounded-lg border ${
-            result.allowRefill === false
-              ? 'bg-red-50 dark:bg-red-950/40 border-red-300 dark:border-red-800 text-red-900 dark:text-red-200'
-              : 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200'
+            res.allowRefill === false
+              ? 'bg-red-50 dark:bg-red-950/40 border-red-300 text-red-900 dark:text-red-200'
+              : 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 text-blue-900 dark:text-blue-200'
           }`}>
-            <div className="font-semibold mb-1">
-              {result.allowRefill === false ? '⚠️ พบความผิดปกติ' : '✓ ปลอดภัย'}
-            </div>
-            <div className="text-sm">
-              {result.warning || `ตรวจพบประวัติรับยา ${result.recentCount || 0} ครั้งใน 30 วัน - อนุญาตให้จ่ายได้`}
-            </div>
-            {result.smsSent && (
-              <div className="text-xs mt-2 opacity-80">
-                ✉️ ส่ง SMS แจ้งเตือนญาติแล้ว
-              </div>
-            )}
+            <div className="font-semibold mb-1">{res.allowRefill === false ? '⚠️ พบความผิดปกติ' : '✓ ปลอดภัย'}</div>
+            <div className="text-sm">{res.warning || `รับยา ${res.recentCount || 0} ครั้งใน 30 วัน - อนุญาตจ่ายได้`}</div>
+            {res.smsSent && <div className="text-xs mt-2 opacity-80">✉️ ส่ง SMS แจ้งญาติแล้ว</div>}
           </div>
         )}
       </div>
     </div>
-  );
-}
-
-/* ============ Main Dashboard ============ */
-
-export default function DashboardPage() {
-  const [dark, setDark] = useState(false);
-  const [stats, setStats] = useState({
-    totalPatients: 0, activeRedFlags: 0,
-    todayAppointments: 0, missedMedications: 0
-  });
-  const [redFlagAlert, setRedFlagAlert] = useState(null);
-  const [missedMeds,   setMissedMeds]   = useState([]);
-  const [appointments, setAppointments] = useState([]);
-  const [smsLog,       setSmsLog]       = useState([]);
-  const [patients,     setPatients]     = useState([]);
-  const [refillOpen,   setRefillOpen]   = useState(false);
-  const [triggering,   setTriggering]   = useState(false);
-  const [connected,    setConnected]    = useState(false);
-  const socketRef = useRef(null);
-
-  /* ── Theme ── */
-  useEffect(() => {
-    setDark(document.documentElement.classList.contains('dark'));
-  }, []);
-  const toggleTheme = () => {
-    const next = !dark;
-    setDark(next);
-    document.documentElement.classList.toggle('dark', next);
-    localStorage.setItem('mdd-theme', next ? 'dark' : 'light');
-  };
-
-  /* ── Fetch ── */
-  const fetchAll = async () => {
-    try {
-      const [s, m, a, p, n] = await Promise.all([
-        fetch(`${API_URL}/api/dashboard/stats`).then(r => r.json()),
-        fetch(`${API_URL}/api/medications/missed`).then(r => r.json()),
-        fetch(`${API_URL}/api/appointments/today`).then(r => r.json()),
-        fetch(`${API_URL}/api/patients`).then(r => r.json()),
-        fetch(`${API_URL}/api/notifications/recent`).then(r => r.json())
-      ]);
-      setStats(s); setMissedMeds(m); setAppointments(a);
-      setPatients(p); setSmsLog(n);
-    } catch (e) {
-      console.error('Fetch error:', e);
-    }
-  };
-
-  /* ── Socket.io ── */
-  useEffect(() => {
-    fetchAll();
-
-    socketRef.current = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
-    const s = socketRef.current;
-
-    s.on('connect',    () => setConnected(true));
-    s.on('disconnect', () => setConnected(false));
-
-    s.on('red-flag-alert', (data) => {
-      setRedFlagAlert(data);
-      // Web Push notification
-      if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('🚨 RED FLAG ALERT', {
-          body: `${data.patient.fullName} - ${data.flagLabel}`,
-          tag: 'red-flag'
-        });
-      }
-    });
-
-    s.on('medication-missed', () => fetchAll());
-    s.on('medication-confirmed', () => fetchAll());
-    s.on('refill-warning', () => fetchAll());
-
-    s.on('sms-sent', (data) => {
-      setSmsLog(prev => [data, ...prev].slice(0, 20));
-    });
-
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-
-    return () => s.disconnect();
-  }, []);
-
-  /* ── Actions ── */
-  const resendSms = async (log) => {
-    await fetch(`${API_URL}/api/trigger/medication-check`, { method: 'POST' });
-    alert(`ส่ง SMS แจ้งญาติของ ${log.patient?.fullName} แล้ว`);
-  };
-
-  const triggerCronCheck = async () => {
-    setTriggering(true);
-    try {
-      const res  = await fetch(`${API_URL}/api/trigger/medication-check`, { method: 'POST' });
-      const data = await res.json();
-      alert(`ตรวจสอบเสร็จ - พบ ${data.checked} รายการ ส่ง SMS ${data.smsSent} ราย`);
-      await fetchAll();
-    } catch (e) {
-      alert('Error: ' + e.message);
-    } finally {
-      setTriggering(false);
-    }
-  };
-
-  const testRedFlag = async () => {
-    if (patients.length === 0) return alert('ไม่มีคนไข้ในระบบ - กดปุ่ม Seed Data ก่อน');
-    const p = patients[0];
-    await fetch(`${API_URL}/api/red-flag`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        patientId: p._id,
-        flagType: 'suicidal',
-        description: 'ทดสอบระบบ - คนไข้พูดถึงการฆ่าตัวตาย'
-      })
-    });
-  };
-
-  const seedDemo = async () => {
-    if (!confirm('ลบข้อมูลเดิมและสร้าง Demo Data ใหม่?')) return;
-    const res = await fetch(`${API_URL}/api/seed`, { method: 'POST' });
-    const data = await res.json();
-    alert(`Seed สำเร็จ: ${JSON.stringify(data.stats)}`);
-    await fetchAll();
-  };
-
-  /* ============ Render ============ */
-  return (
-    <main className="min-h-screen bg-slate-50 dark:bg-slate-900">
-      {/* ───── NAVBAR ───── */}
-      <header className="sticky top-0 z-40 backdrop-blur bg-white/80 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center text-white text-lg shadow-md">
-              🏥
-            </div>
-            <div>
-              <div className="font-bold text-slate-900 dark:text-slate-100 leading-tight">
-                MDD Care - แผนกจิตเวช
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                รพ.คลองหาด จ.สระแก้ว
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-xs">
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-blue-500 animate-pulse' : 'bg-slate-400'}`} />
-              <span className="text-slate-600 dark:text-slate-400">
-                {connected ? 'Real-time' : 'Offline'}
-              </span>
-            </div>
-            <Link
-              href="/chat"
-              className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition flex items-center gap-1.5"
-            >
-              💬 <span className="hidden sm:inline">แชต</span>
-            </Link>
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition"
-              aria-label="toggle theme"
-            >
-              {dark ? '☀️' : '🌙'}
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* ───── CONTENT ───── */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-
-        {/* RED FLAG BANNER */}
-        <RedFlagBanner alert={redFlagAlert} onClose={() => setRedFlagAlert(null)} />
-
-        {/* STATS */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <StatCard icon="👥" label="คนไข้ทั้งหมด"   value={stats.totalPatients}     accent="blue" />
-          <StatCard icon="🚨" label="Red Flag ฉุกเฉิน" value={stats.activeRedFlags}    accent="red" />
-          <StatCard icon="📅" label="นัดวันนี้"      value={stats.todayAppointments} accent="indigo" />
-          <StatCard icon="💊" label="ลืมทานยา"      value={stats.missedMedications} accent="slate" />
-        </div>
-
-        {/* QUICK ACTIONS */}
-        <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-3">
-          <button
-            onClick={() => setRefillOpen(true)}
-            className="px-4 py-3 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-700 hover:from-indigo-700 hover:to-blue-800 text-white font-medium shadow-sm hover:shadow-md transition flex items-center justify-center gap-2"
-          >
-            🔍 ตรวจยาควบคุม
-          </button>
-          <button
-            onClick={triggerCronCheck}
-            disabled={triggering}
-            className="px-4 py-3 rounded-xl bg-slate-700 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-medium transition flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            ⏰ {triggering ? 'กำลังตรวจ...' : 'เช็คลืมยา'}
-          </button>
-          <button
-            onClick={testRedFlag}
-            className="px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium transition flex items-center justify-center gap-2"
-          >
-            🚨 ทดสอบ Red Flag
-          </button>
-          <button
-            onClick={seedDemo}
-            className="px-4 py-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-300 font-medium transition flex items-center justify-center gap-2"
-          >
-            🌱 Seed Demo
-          </button>
-        </div>
-
-        {/* MAIN GRID */}
-        <div className="grid lg:grid-cols-3 gap-6">
-
-          {/* MISSED MEDICATIONS */}
-          <div className="lg:col-span-2 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                💊 คนไข้ที่ลืมทานยา
-                <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300">
-                  {missedMeds.length}
-                </span>
-              </h2>
-              <span className="text-xs text-slate-500 dark:text-slate-400">
-                ส่ง SMS เตือนญาติอัตโนมัติ
-              </span>
-            </div>
-            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-              {missedMeds.length === 0 ? (
-                <div className="text-center py-12 text-slate-400 dark:text-slate-500">
-                  <div className="text-5xl mb-2">✓</div>
-                  <div className="text-sm">ไม่มีคนไข้ลืมทานยา</div>
-                </div>
-              ) : (
-                missedMeds.map(log => (
-                  <MissedMedRow key={log._id} log={log} onResend={resendSms} />
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* TODAY APPOINTMENTS */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
-              📅 นัดหมายวันนี้
-              <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">
-                {appointments.length}
-              </span>
-            </h2>
-            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-              {appointments.length === 0 ? (
-                <div className="text-center py-12 text-slate-400 dark:text-slate-500">
-                  <div className="text-5xl mb-2">📭</div>
-                  <div className="text-sm">ไม่มีนัดหมาย</div>
-                </div>
-              ) : (
-                appointments.map(apt => (
-                  <AppointmentRow key={apt._id} apt={apt} />
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* SMS ACTIVITY LOG */}
-        <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              📱 SMS ที่ส่งล่าสุด (Real-time)
-            </h2>
-            <button
-              onClick={fetchAll}
-              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-            >
-              รีเฟรช
-            </button>
-          </div>
-          <div className="space-y-1 max-h-[300px] overflow-y-auto">
-            {smsLog.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 dark:text-slate-500 text-sm">
-                ยังไม่มีการส่ง SMS
-              </div>
-            ) : (
-              smsLog.map((log, i) => <SmsLogRow key={log._id || i} log={log} />)
-            )}
-          </div>
-        </div>
-
-        <footer className="mt-8 text-center text-xs text-slate-400 dark:text-slate-600 py-4">
-          MDD Care © 2026 · รพ.คลองหาด แผนกจิตเวช · Digital 100% Paperless
-        </footer>
-      </div>
-
-      {/* MODALS */}
-      <RefillModal
-        open={refillOpen}
-        onClose={() => setRefillOpen(false)}
-        patients={patients}
-      />
-    </main>
   );
 }
