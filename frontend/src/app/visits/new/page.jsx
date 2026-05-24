@@ -4,11 +4,19 @@
  * Visit/Encounter Form - บันทึกการตรวจ (SOAP + PHQ-9 + Rx)
  */
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+
+export default function NewVisitPageWrapper() {
+  return (
+    <Suspense fallback={<AppShell title="กำลังโหลด..."><div className="text-center py-20 text-slate-400">⏳</div></AppShell>}>
+      <NewVisitPage />
+    </Suspense>
+  );
+}
 
 const PHQ9_QUESTIONS = [
   'รู้สึกหดหู่ ซึมเศร้า หรือสิ้นหวัง',
@@ -22,7 +30,7 @@ const PHQ9_QUESTIONS = [
   'คิดอยากตาย หรือคิดทำร้ายตัวเอง'
 ];
 
-export default function NewVisitPage() {
+function NewVisitPage() {
   const router = useRouter();
   const search = useSearchParams();
   const preselectedHN = search?.get('patient');
